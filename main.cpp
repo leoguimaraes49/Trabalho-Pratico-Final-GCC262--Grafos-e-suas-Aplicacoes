@@ -17,41 +17,36 @@ const int INF = INT_MAX / 3;
 class GrafoLogistica
 {
 private:
-    // Mapeamento dos nós: nome para índice e vetor com os nomes
+    // Mapeamento dos nós e lista de nomes
     map<string, int> mapeamento_nos;
     vector<string> nos;
     int total_nos = 0;
 
-    // Matrizes de caminhos mínimos e predecessores (calculadas com Floyd–Warshall)
+    // Matrizes de distâncias e predecessores (Floyd–Warshall)
     vector<vector<int>> distancias;
     vector<vector<int>> predecessores;
 
-    // Dados dos nós, arestas e arcos do grafo
+    // Dados do grafo
     vector<int> nos_requeridos;
     vector<tuple<int, int, int>> arestas; // Arestas não direcionadas
     vector<tuple<int, int, int>> arcos;   // Arcos direcionados
     vector<pair<int, int>> arestas_requeridas;
     vector<pair<int, int>> arcos_requeridos;
-
-    // Lista de adjacência (usada nos cálculos, mas componentes conectados foram removidos)
     vector<vector<int>> lista_adj;
 
-    // Estrutura para guardar as métricas calculadas
+    // Estrutura de métricas
     struct Metricas
     {
         int qtd_vertices, qtd_arestas, qtd_arcos;
         int vertices_req, arestas_req, arcos_req;
-        double densidade; // ((2 * |arestas| + |arcos|) * 100) / (n * (n - 1))
+        float densidade; // Valor real: (2 * |arestas| + |arcos|) / (n * (n-1))
         int grau_min, grau_max;
         map<string, double> intermediacao;
         double caminho_medio;
         int diametro;
     } metricas;
 
-    // ---------------------------------------------------------------
-    // FUNÇÕES AUXILIARES DE MANIPULAÇÃO DE STRINGS
-    // ---------------------------------------------------------------
-    // Remove espaços em branco do início e fim da string
+    // Remove espaços em branco das extremidades da string
     string trim(const string &str)
     {
         size_t first = str.find_first_not_of(" \t\r\n");
@@ -61,7 +56,7 @@ private:
         return str.substr(first, last - first + 1);
     }
 
-    // Separa a linha em tokens usando espaço ou tabulação
+    // Separa a linha em tokens
     vector<string> split(const string &linha)
     {
         vector<string> tokens;
@@ -72,12 +67,9 @@ private:
         return tokens;
     }
 
-    // ---------------------------------------------------------------
-    // PROCESSAMENTO DAS LINHAS CONFORME A SEÇÃO IDENTIFICADA
-    // ---------------------------------------------------------------
+    // Processa cada linha com base na seção identificada
     void processarLinha(const string &linha, const string &secao)
     {
-        // Ignora linhas que contenham "DEMAND" ou "COST"
         if (linha.find("DEMAND") != string::npos || linha.find("COST") != string::npos)
             return;
         vector<string> tokens = split(linha);
@@ -211,9 +203,7 @@ private:
         }
     }
 
-    // ---------------------------------------------------------------
-    // CONSTRUÇÃO DAS MATRIZES DE CUSTO, PREDECESSORES E DA LISTA DE ADJACÊNCIA
-    // ---------------------------------------------------------------
+    // Inicializa matrizes, lista de adjacência e executa Floyd–Warshall
     void inicializarMatrizes()
     {
         total_nos = nos.size();
@@ -224,7 +214,7 @@ private:
             distancias[i][i] = 0;
             predecessores[i][i] = i;
         }
-        // Insere as arestas (não direcionadas)
+        // Insere arestas (não direcionadas)
         for (auto &a : arestas)
         {
             int u, v, custo;
@@ -237,7 +227,7 @@ private:
                 predecessores[v][u] = v;
             }
         }
-        // Insere os arcos (direcionados)
+        // Insere arcos (direcionados)
         for (auto &a : arcos)
         {
             int u, v, custo;
@@ -248,7 +238,7 @@ private:
                 predecessores[u][v] = u;
             }
         }
-        // Cria a lista de adjacência
+        // Cria lista de adjacência
         lista_adj.assign(total_nos, vector<int>());
         for (auto &a : arestas)
         {
@@ -261,21 +251,17 @@ private:
         {
             int u, v, custo;
             tie(u, v, custo) = a;
-            // Apesar dos arcos serem direcionados, os adicionamos em ambas as direções
-            // para facilitar o cálculo de conectividade e graus.
+            // Adiciona em ambas direções para facilitar conectividade
             lista_adj[u].push_back(v);
             lista_adj[v].push_back(u);
         }
-        // Inicializa o mapa de intermediação para cada nó com valor zero
+        // Inicializa o mapa de intermediação
         for (const auto &nome : nos)
             metricas.intermediacao[nome] = 0.0;
-        // Calcula a matriz de caminhos mínimos e os predecessores
         floydWarshall();
     }
 
-    // ---------------------------------------------------------------
-    // ALGORITMO DE FLOYD–WARSHALL
-    // ---------------------------------------------------------------
+    // Implementação do algoritmo de Floyd–Warshall
     void floydWarshall()
     {
         for (int k = 0; k < total_nos; k++)
@@ -294,9 +280,7 @@ private:
         }
     }
 
-    // ---------------------------------------------------------------
-    // CÁLCULO DAS MÉTRICAS (exceto componentes conectados)
-    // ---------------------------------------------------------------
+    // Calcula grau mínimo e máximo
     void calcularGraus()
     {
         vector<int> graus(total_nos, 0);
@@ -306,6 +290,7 @@ private:
         metricas.grau_max = *max_element(graus.begin(), graus.end());
     }
 
+    // Calcula a intermediação de cada nó
     void calcularIntermediacao()
     {
         for (int s = 0; s < total_nos; s++)
@@ -324,14 +309,16 @@ private:
         }
     }
 
-    double calcularDensidade()
+    // Calcula a densidade
+    float calcularDensidade()
     {
         if (total_nos <= 1)
-            return 0.0;
-        double numConexoes = 2.0 * arestas.size() + arcos.size();
-        return (numConexoes * 100.0) / (total_nos * (total_nos - 1));
+            return 0.0f;
+        float numConexoes = 2.0f * arestas.size() + arcos.size();
+        return numConexoes / (total_nos * (total_nos - 1));
     }
 
+    // Calcula o caminho médio entre os nós
     double calcularCaminhoMedio()
     {
         double soma = 0.0;
@@ -350,6 +337,7 @@ private:
         return (cont > 0) ? (soma / cont) : 0.0;
     }
 
+    // Retorna o diâmetro do grafo
     int calcularDiametro()
     {
         int diam = 0;
@@ -365,9 +353,7 @@ private:
     }
 
 public:
-    // ---------------------------------------------------------------
-    // LEITURA DOS DADOS DO ARQUIVO (Parser Flexível)
-    // ---------------------------------------------------------------
+    // Lê e processa os dados do arquivo
     void lerDados(const string &arquivo)
     {
         ifstream entrada(arquivo);
@@ -376,14 +362,12 @@ public:
             cerr << "Erro ao abrir o arquivo " << arquivo << endl;
             return;
         }
-        string linha;
-        string secao = "none";
+        string linha, secao = "none";
         while (getline(entrada, linha))
         {
             linha = trim(linha);
             if (linha.empty())
                 continue;
-            // Ignora cabeçalhos desnecessários
             if (linha.find("Name:") != string::npos ||
                 linha.find("Optimal value:") != string::npos ||
                 linha.find("#Vehicles:") != string::npos ||
@@ -394,41 +378,24 @@ public:
                 linha.find("#Arcs:") != string::npos ||
                 linha.find("#Required") != string::npos)
                 continue;
-            // Define a seção atual conforme a palavra-chave
             if (linha.substr(0, 3) == "ReN" || linha.substr(0, 4) == "ReN.")
-            {
                 secao = "reqnodes";
-                continue;
-            }
-            if (linha.substr(0, 3) == "ReE" || linha.substr(0, 4) == "ReE.")
-            {
+            else if (linha.substr(0, 3) == "ReE" || linha.substr(0, 4) == "ReE.")
                 secao = "reqedges";
-                continue;
-            }
-            if (linha.substr(0, 4) == "EDGE")
-            {
+            else if (linha.substr(0, 4) == "EDGE")
                 secao = "edges";
-                continue;
-            }
-            if (linha.substr(0, 4) == "ReA.")
-            {
+            else if (linha.substr(0, 4) == "ReA.")
                 secao = "reqarcs";
-                continue;
-            }
-            if (linha.substr(0, 3) == "ARC")
-            {
+            else if (linha.substr(0, 3) == "ARC")
                 secao = "arcs";
-                continue;
-            }
-            processarLinha(linha, secao);
+            else
+                processarLinha(linha, secao);
         }
         entrada.close();
         inicializarMatrizes();
     }
 
-    // ---------------------------------------------------------------
-    // CALCULA TODAS AS MÉTRICAS (exceto componentes conectados)
-    // ---------------------------------------------------------------
+    // Calcula todas as métricas
     void calcularTodasMetricas()
     {
         metricas.qtd_vertices = total_nos;
@@ -438,18 +405,16 @@ public:
         metricas.arestas_req = arestas_requeridas.size();
         metricas.arcos_req = arcos_requeridos.size();
         metricas.densidade = calcularDensidade();
-        // Cálculo de componentes conectados removido conforme o enunciado
         calcularGraus();
         calcularIntermediacao();
         metricas.caminho_medio = calcularCaminhoMedio();
         metricas.diametro = calcularDiametro();
     }
 
-    // ---------------------------------------------------------------
-    // IMPRIME OS RESULTADOS EM um std::ostream (pode ser cout ou ofstream)
-    // ---------------------------------------------------------------
+    // Imprime os resultados no ostream informado
     void imprimirResultados(ostream &out) const
     {
+        // Imprime densidade com 4 casas decimais; os demais com 2 casas decimais
         out << fixed << setprecision(2);
         out << "1. Vértices: " << metricas.qtd_vertices << "\n";
         out << "2. Arestas: " << metricas.qtd_arestas << "\n";
@@ -457,7 +422,8 @@ public:
         out << "4. Vértices requeridos: " << metricas.vertices_req << "\n";
         out << "5. Arestas requeridas: " << metricas.arestas_req << "\n";
         out << "6. Arcos requeridos: " << metricas.arcos_req << "\n";
-        out << "7. Densidade: " << metricas.densidade << "%\n";
+        out << "7. Densidade: " << fixed << setprecision(4) << metricas.densidade << "\n";
+        out << setprecision(2);
         out << "8. Grau mínimo: " << metricas.grau_min << "\n";
         out << "9. Grau máximo: " << metricas.grau_max << "\n";
         out << "10. Intermediação:\n";
@@ -465,12 +431,6 @@ public:
             out << "    " << par.first << ": " << par.second << "\n";
         out << "11. Caminho médio: " << metricas.caminho_medio << "\n";
         out << "12. Diâmetro: " << metricas.diametro << "\n";
-    }
-
-    // Exibe os resultados no console
-    void exibirResultados() const
-    {
-        imprimirResultados(cout);
     }
 
     // Salva os resultados em um arquivo de texto
@@ -490,20 +450,18 @@ public:
 int main()
 {
     string nomeArquivo;
-    cout << "Digite o nome do arquivo .dat: ";
+    cout << "Digite o nome do arquivo .dat (somente o nome, ex: dados.dat): ";
     getline(cin, nomeArquivo);
     if (nomeArquivo.empty())
-        nomeArquivo = "data/dados.dat";
+        nomeArquivo = "dados.dat"; // Usa nome padrão se não for informado nenhum
+
+    string caminhoArquivo = "data/" + nomeArquivo;
 
     GrafoLogistica grafo;
-    grafo.lerDados("data/" + nomeArquivo);
+    grafo.lerDados(caminhoArquivo);
     grafo.calcularTodasMetricas();
-
-    // Exibe os resultados no console
-    grafo.exibirResultados();
-
-    // Salva os resultados em um arquivo TXT
     grafo.salvarResultados("results/resultados.txt");
+    cout << "Resultados salvos com sucesso em results/resultados.txt";
 
     return 0;
 }
