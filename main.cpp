@@ -8,394 +8,400 @@
 #include <iomanip>
 #include <algorithm>
 #include <climits>
+#include <chrono>
 #include <string>
+#include <cctype>
+#ifdef _WIN32
+#include <direct.h>  // _mkdir
+#include <windows.h> // FindFirstFileA, FindNextFileA, FindClose
+#else
+#include <sys/stat.h> // mkdir
+#include <dirent.h>   // opendir, readdir
+#endif
 
 using namespace std;
 
 const int INF = INT_MAX / 3;
 
+// utilidades
+int safeStoi(const string &s, int def = 0)
+{
+    try
+    {
+        size_t p;
+        int v = stoi(s, &p);
+        return (p == s.size() ? v : def);
+    }
+    catch (...)
+    {
+        return def;
+    }
+}
+
+string trim(const string &s)
+{
+    size_t f = s.find_first_not_of(" \t\r\n");
+    if (f == string::npos)
+        return "";
+    size_t l = s.find_last_not_of(" \t\r\n");
+    return s.substr(f, l - f + 1);
+}
+
+vector<string> split(const string &line)
+{
+    vector<string> tk;
+    istringstream is(line);
+    string x;
+    while (is >> x)
+        tk.push_back(x);
+    return tk;
+}
+
+struct Servico
+{
+    int id, u, v, custo, demanda;
+    bool dirigido, atendido = false;
+};
+
 class GrafoLogistica
 {
 private:
-    // Mapeamento dos nós e lista de nomes
     map<string, int> mapeamento_nos;
     vector<string> nos;
     int total_nos = 0;
 
-    // Matrizes de distâncias e predecessores (Floyd–Warshall)
-    vector<vector<int>> distancias;
-    vector<vector<int>> predecessores;
-
-    // Dados do grafo
+    vector<vector<int>> distancias, predecessores, lista_adj;
+    vector<tuple<int, int, int>> arestas, arcos;
+    vector<pair<int, int>> arestas_requeridas, arcos_requeridas;
     vector<int> nos_requeridos;
-    vector<tuple<int, int, int>> arestas; // Arestas não direcionadas
-    vector<tuple<int, int, int>> arcos;   // Arcos direcionados
-    vector<pair<int, int>> arestas_requeridas;
-    vector<pair<int, int>> arcos_requeridos;
-    vector<vector<int>> lista_adj;
+    vector<Servico> servicos;
 
-    // Estrutura de métricas
     struct Metricas
     {
-        int qtd_vertices, qtd_arestas, qtd_arcos;
-        int vertices_req, arestas_req, arcos_req;
-        float densidade; // Valor real: (2 * |arestas| + |arcos|) / (n * (n-1))
-        int grau_min, grau_max;
+        int qtd_vertices = 0, qtd_arestas = 0, qtd_arcos = 0;
+        int vertices_req = 0, arestas_req = 0, arcos_req = 0;
+        float densidade = 0;
+        int grau_min = 0, grau_max = 0;
         map<string, double> intermediacao;
-        double caminho_medio;
-        int diametro;
+        double caminho_medio = 0;
+        int diametro = 0;
     } metricas;
 
-    // Remove espaços em branco das extremidades da string
-    string trim(const string &str)
-    {
-        size_t first = str.find_first_not_of(" \t\r\n");
-        if (first == string::npos)
-            return "";
-        size_t last = str.find_last_not_of(" \t\r\n");
-        return str.substr(first, last - first + 1);
-    }
+    int depot = 0, capacidade_veiculo = 0;
 
-    // Separa a linha em tokens
-    vector<string> split(const string &linha)
+    void addNo(const string &nome)
     {
-        vector<string> tokens;
-        istringstream iss(linha);
-        string token;
-        while (iss >> token)
-            tokens.push_back(token);
-        return tokens;
-    }
-
-    // Processa cada linha com base na seção identificada
-    void processarLinha(const string &linha, const string &secao)
-    {
-        if (linha.find("DEMAND") != string::npos || linha.find("COST") != string::npos)
-            return;
-        vector<string> tokens = split(linha);
-        if (tokens.empty())
-            return;
-
-        if (secao == "nodes")
+        if (!mapeamento_nos.count(nome))
         {
-            string nome = tokens[0];
-            if (mapeamento_nos.find(nome) == mapeamento_nos.end())
-            {
-                mapeamento_nos[nome] = nos.size();
-                nos.push_back(nome);
-            }
+            mapeamento_nos[nome] = nos.size();
+            nos.push_back(nome);
         }
-        else if (secao == "reqnodes")
+    }
+
+    void processarLinha(const string &linha, const string &secao, int &proxId)
+    {
+        vector<string> tk = split(linha);
+        if (tk.empty())
+            return;
+        auto pegaDemanda = [&](int idxCost) -> int
         {
-            string nome = tokens[0];
-            if (!nome.empty() && nome[0] == 'N')
+            for (size_t k = idxCost + 1; k < tk.size(); ++k)
+                if (tk[k] == "DEMAND" && k + 1 < tk.size())
+                    return safeStoi(tk[k + 1], 1);
+            return 1;
+        };
+        if (secao == "nodes" || secao == "reqnodes")
+        {
+            string nome = tk[0];
+            if (!nome.empty() && (nome[0] == 'N' || nome[0] == 'n'))
                 nome = nome.substr(1);
-            if (mapeamento_nos.find(nome) == mapeamento_nos.end())
+            addNo(nome);
+            if (secao == "reqnodes")
             {
-                mapeamento_nos[nome] = nos.size();
-                nos.push_back(nome);
-            }
-            nos_requeridos.push_back(mapeamento_nos[nome]);
-        }
-        else if (secao == "reqedges")
-        {
-            if (tokens.size() >= 4)
-            {
-                int idx = isalpha(tokens[0][0]) ? 1 : 0;
-                if (tokens.size() - idx < 3)
-                    return;
-                string no1 = tokens[idx], no2 = tokens[idx + 1];
-                int custo = stoi(tokens[idx + 2]);
-                if (!no1.empty() && no1[0] == 'N')
-                    no1 = no1.substr(1);
-                if (!no2.empty() && no2[0] == 'N')
-                    no2 = no2.substr(1);
-                if (mapeamento_nos.find(no1) == mapeamento_nos.end())
-                {
-                    mapeamento_nos[no1] = nos.size();
-                    nos.push_back(no1);
-                }
-                if (mapeamento_nos.find(no2) == mapeamento_nos.end())
-                {
-                    mapeamento_nos[no2] = nos.size();
-                    nos.push_back(no2);
-                }
-                int u = mapeamento_nos[no1], v = mapeamento_nos[no2];
-                arestas_requeridas.push_back(make_pair(u, v));
-                arestas.push_back(make_tuple(u, v, custo));
+                int v = mapeamento_nos[nome];
+                nos_requeridos.push_back(v);
+                int dem = (tk.size() > 2 ? safeStoi(tk.back(), 1) : 1);
+                servicos.push_back({proxId++, v, v, 0, dem, false});
             }
         }
-        else if (secao == "edges")
+        else if (secao == "reqedges" || secao == "edges")
         {
-            int idx = (tokens.size() >= 4 && isalpha(tokens[0][0])) ? 1 : 0;
-            if (tokens.size() - idx < 3)
-                return;
-            string no1 = tokens[idx], no2 = tokens[idx + 1];
-            int custo = stoi(tokens[idx + 2]);
-            if (!no1.empty() && no1[0] == 'N')
-                no1 = no1.substr(1);
-            if (!no2.empty() && no2[0] == 'N')
-                no2 = no2.substr(1);
-            if (mapeamento_nos.find(no1) == mapeamento_nos.end())
+            int idx = isalpha(tk[0][0]) ? 1 : 0;
+            string s1 = tk[idx], s2 = tk[idx + 1];
+            if (s1[0] == 'N' || s1[0] == 'n')
+                s1 = s1.substr(1);
+            if (s2[0] == 'N' || s2[0] == 'n')
+                s2 = s2.substr(1);
+            int cost = safeStoi(tk[idx + 2]);
+            int demF = pegaDemanda(idx + 2);
+            int dem = (tk.size() > idx + 3 ? safeStoi(tk[idx + 3], demF) : demF);
+            addNo(s1);
+            addNo(s2);
+            int u = mapeamento_nos[s1], v = mapeamento_nos[s2];
+            arestas.emplace_back(u, v, cost);
+            if (secao == "reqedges")
             {
-                mapeamento_nos[no1] = nos.size();
-                nos.push_back(no1);
-            }
-            if (mapeamento_nos.find(no2) == mapeamento_nos.end())
-            {
-                mapeamento_nos[no2] = nos.size();
-                nos.push_back(no2);
-            }
-            int u = mapeamento_nos[no1], v = mapeamento_nos[no2];
-            arestas.push_back(make_tuple(u, v, custo));
-        }
-        else if (secao == "reqarcs")
-        {
-            if (tokens.size() >= 4)
-            {
-                int idx = isalpha(tokens[0][0]) ? 1 : 0;
-                if (tokens.size() - idx < 3)
-                    return;
-                string no1 = tokens[idx], no2 = tokens[idx + 1];
-                int custo = stoi(tokens[idx + 2]);
-                if (!no1.empty() && no1[0] == 'N')
-                    no1 = no1.substr(1);
-                if (!no2.empty() && no2[0] == 'N')
-                    no2 = no2.substr(1);
-                if (mapeamento_nos.find(no1) == mapeamento_nos.end())
-                {
-                    mapeamento_nos[no1] = nos.size();
-                    nos.push_back(no1);
-                }
-                if (mapeamento_nos.find(no2) == mapeamento_nos.end())
-                {
-                    mapeamento_nos[no2] = nos.size();
-                    nos.push_back(no2);
-                }
-                int u = mapeamento_nos[no1], v = mapeamento_nos[no2];
-                arcos_requeridos.push_back(make_pair(u, v));
-                arcos.push_back(make_tuple(u, v, custo));
+                arestas_requeridas.emplace_back(u, v);
+                servicos.push_back({proxId++, u, v, cost, dem, false});
             }
         }
-        else if (secao == "arcs")
+        else if (secao == "reqarcs" || secao == "arcs")
         {
-            int idx = (tokens.size() >= 4 && isalpha(tokens[0][0])) ? 1 : 0;
-            if (tokens.size() - idx < 3)
-                return;
-            string no1 = tokens[idx], no2 = tokens[idx + 1];
-            int custo = stoi(tokens[idx + 2]);
-            if (!no1.empty() && no1[0] == 'N')
-                no1 = no1.substr(1);
-            if (!no2.empty() && no2[0] == 'N')
-                no2 = no2.substr(1);
-            if (mapeamento_nos.find(no1) == mapeamento_nos.end())
+            int idx = isalpha(tk[0][0]) ? 1 : 0;
+            string s1 = tk[idx], s2 = tk[idx + 1];
+            if (s1[0] == 'N' || s1[0] == 'n')
+                s1 = s1.substr(1);
+            if (s2[0] == 'N' || s2[0] == 'n')
+                s2 = s2.substr(1);
+            int cost = safeStoi(tk[idx + 2]);
+            int demF = pegaDemanda(idx + 2);
+            int dem = (tk.size() > idx + 3 ? safeStoi(tk[idx + 3], demF) : demF);
+            addNo(s1);
+            addNo(s2);
+            int u = mapeamento_nos[s1], v = mapeamento_nos[s2];
+            arcos.emplace_back(u, v, cost);
+            if (secao == "reqarcs")
             {
-                mapeamento_nos[no1] = nos.size();
-                nos.push_back(no1);
+                arcos_requeridas.emplace_back(u, v);
+                servicos.push_back({proxId++, u, v, cost, dem, true});
             }
-            if (mapeamento_nos.find(no2) == mapeamento_nos.end())
-            {
-                mapeamento_nos[no2] = nos.size();
-                nos.push_back(no2);
-            }
-            int u = mapeamento_nos[no1], v = mapeamento_nos[no2];
-            arcos.push_back(make_tuple(u, v, custo));
         }
     }
 
-    // Inicializa matrizes, lista de adjacência e executa Floyd–Warshall
-    void inicializarMatrizes()
-    {
-        total_nos = nos.size();
-        distancias.assign(total_nos, vector<int>(total_nos, INF));
-        predecessores.assign(total_nos, vector<int>(total_nos, -1));
-        for (int i = 0; i < total_nos; i++)
-        {
-            distancias[i][i] = 0;
-            predecessores[i][i] = i;
-        }
-        // Insere arestas (não direcionadas)
-        for (auto &a : arestas)
-        {
-            int u, v, custo;
-            tie(u, v, custo) = a;
-            if (custo < distancias[u][v])
-            {
-                distancias[u][v] = custo;
-                distancias[v][u] = custo;
-                predecessores[u][v] = u;
-                predecessores[v][u] = v;
-            }
-        }
-        // Insere arcos (direcionados)
-        for (auto &a : arcos)
-        {
-            int u, v, custo;
-            tie(u, v, custo) = a;
-            if (custo < distancias[u][v])
-            {
-                distancias[u][v] = custo;
-                predecessores[u][v] = u;
-            }
-        }
-        // Cria lista de adjacência
-        lista_adj.assign(total_nos, vector<int>());
-        for (auto &a : arestas)
-        {
-            int u, v, custo;
-            tie(u, v, custo) = a;
-            lista_adj[u].push_back(v);
-            lista_adj[v].push_back(u);
-        }
-        for (auto &a : arcos)
-        {
-            int u, v, custo;
-            tie(u, v, custo) = a;
-            // Adiciona em ambas direções para facilitar conectividade
-            lista_adj[u].push_back(v);
-            lista_adj[v].push_back(u);
-        }
-        // Inicializa o mapa de intermediação
-        for (const auto &nome : nos)
-            metricas.intermediacao[nome] = 0.0;
-        floydWarshall();
-    }
-
-    // Implementação do algoritmo de Floyd–Warshall
     void floydWarshall()
     {
         for (int k = 0; k < total_nos; k++)
-        {
             for (int i = 0; i < total_nos; i++)
-            {
                 for (int j = 0; j < total_nos; j++)
-                {
                     if (distancias[i][k] + distancias[k][j] < distancias[i][j])
                     {
                         distancias[i][j] = distancias[i][k] + distancias[k][j];
                         predecessores[i][j] = predecessores[k][j];
                     }
-                }
+    }
+
+    void inicializarMatrizes()
+    {
+        total_nos = nos.size();
+        distancias.assign(total_nos, vector<int>(total_nos, INF));
+        predecessores.assign(total_nos, vector<int>(total_nos, -1));
+        lista_adj.assign(total_nos, vector<int>());
+
+        for (int i = 0; i < total_nos; i++)
+        {
+            distancias[i][i] = 0;
+            predecessores[i][i] = i;
+        }
+        for (auto &a : arestas)
+        {
+            int u, v, c;
+            tie(u, v, c) = a;
+            if (c < distancias[u][v])
+            {
+                distancias[u][v] = distancias[v][u] = c;
+                predecessores[u][v] = u;
+                predecessores[v][u] = v;
             }
         }
+        for (auto &a : arcos)
+        {
+            int u, v, c;
+            tie(u, v, c) = a;
+            if (c < distancias[u][v])
+            {
+                distancias[u][v] = c;
+                predecessores[u][v] = u;
+            }
+        }
+        for (auto &a : arestas)
+        {
+            int u, v, c;
+            tie(u, v, c) = a;
+            lista_adj[u].push_back(v);
+            lista_adj[v].push_back(u);
+        }
+        for (auto &a : arcos)
+        {
+            int u, v, c;
+            tie(u, v, c) = a;
+            lista_adj[u].push_back(v);
+            lista_adj[v].push_back(u);
+        }
+
+        metricas.intermediacao.clear();
+        for (const auto &n : nos)
+            metricas.intermediacao[n] = 0.0;
+
+        floydWarshall();
     }
 
-    // Calcula grau mínimo e máximo
     void calcularGraus()
     {
-        vector<int> graus(total_nos, 0);
+        vector<int> graus(total_nos);
         for (int i = 0; i < total_nos; i++)
             graus[i] = lista_adj[i].size();
-        metricas.grau_min = *min_element(graus.begin(), graus.end());
-        metricas.grau_max = *max_element(graus.begin(), graus.end());
+        metricas.grau_min = total_nos ? *min_element(graus.begin(), graus.end()) : 0;
+        metricas.grau_max = total_nos ? *max_element(graus.begin(), graus.end()) : 0;
     }
 
-    // Calcula a intermediação de cada nó
     void calcularIntermediacao()
     {
         for (int s = 0; s < total_nos; s++)
-        {
             for (int t = 0; t < total_nos; t++)
-            {
-                if (s == t || predecessores[s][t] == -1)
-                    continue;
-                int atual = t;
-                while (predecessores[s][atual] != s && predecessores[s][atual] != -1)
+                if (s != t && predecessores[s][t] != -1)
                 {
-                    atual = predecessores[s][atual];
-                    metricas.intermediacao[nos[atual]]++;
+                    int at = t;
+                    while (predecessores[s][at] != s)
+                    {
+                        at = predecessores[s][at];
+                        metricas.intermediacao[nos[at]]++;
+                    }
                 }
-            }
-        }
     }
 
-    // Calcula a densidade
     float calcularDensidade()
     {
         if (total_nos <= 1)
             return 0.0f;
-        float numConexoes = 2.0f * arestas.size() + arcos.size();
-        return numConexoes / (total_nos * (total_nos - 1));
+        float con = 2.0f * arestas.size() + arcos.size();
+        return con / (total_nos * (total_nos - 1));
     }
 
-    // Calcula o caminho médio entre os nós
     double calcularCaminhoMedio()
     {
-        double soma = 0.0;
-        int cont = 0;
+        long long sum = 0;
+        int cnt = 0;
         for (int i = 0; i < total_nos; i++)
-        {
-            for (int j = 0; j < total_nos; j++)
-            {
-                if (i != j && distancias[i][j] < INF)
+            for (int j = i + 1; j < total_nos; j++)
+                if (distancias[i][j] < INF)
                 {
-                    soma += distancias[i][j];
-                    cont++;
+                    sum += distancias[i][j];
+                    cnt++;
                 }
-            }
-        }
-        return (cont > 0) ? (soma / cont) : 0.0;
+        return cnt ? double(sum) / cnt : 0.0;
     }
 
-    // Retorna o diâmetro do grafo
     int calcularDiametro()
     {
-        int diam = 0;
+        int d = 0;
         for (int i = 0; i < total_nos; i++)
+            for (int j = i + 1; j < total_nos; j++)
+                if (distancias[i][j] < INF)
+                    d = max(d, distancias[i][j]);
+        return d;
+    }
+
+    struct Visita
+    {
+        bool depot;
+        int id, u, v;
+    };
+    struct Rota
+    {
+        vector<Visita> vis;
+        int demanda = 0, custo = 0;
+    };
+
+    vector<Rota> gerarRotas()
+    {
+        vector<Servico> local = servicos;
+        vector<Rota> rotas;
+        int faltam = local.size();
+        while (faltam)
         {
-            for (int j = 0; j < total_nos; j++)
+            Rota R;
+            R.vis.push_back({true, 0, 1, 1});
+            int pos = depot, cap = capacidade_veiculo;
+            while (true)
             {
-                if (i != j && distancias[i][j] < INF)
-                    diam = max(diam, distancias[i][j]);
+                int idx = -1;
+                double best = 1e30;
+                for (size_t i = 0; i < local.size(); ++i)
+                {
+                    auto &S = local[i];
+                    if (S.atendido || S.demanda > cap)
+                        continue;
+                    int dead = min(distancias[pos][S.u], distancias[pos][S.v]);
+                    double sc = double(dead + S.custo) / max(1, S.demanda);
+                    if (sc < best)
+                    {
+                        best = sc;
+                        idx = i;
+                    }
+                }
+                if (idx < 0)
+                    break;
+                auto &S = local[idx];
+                bool inv = distancias[pos][S.v] < distancias[pos][S.u];
+                int a = inv ? S.v : S.u, b = inv ? S.u : S.v;
+                R.custo += distancias[pos][a] + S.custo;
+                R.demanda += S.demanda;
+                R.vis.push_back({false, S.id, a, b});
+                pos = b;
+                cap -= S.demanda;
+                local[idx].atendido = true;
+                --faltam;
             }
+            R.custo += distancias[pos][depot];
+            R.vis.push_back({true, 0, 1, 1});
+            rotas.push_back(move(R));
         }
-        return diam;
+        return rotas;
+    }
+
+    int custoTotal(const vector<Rota> &rotas) const
+    {
+        int c = 0;
+        for (auto &r : rotas)
+            c += r.custo;
+        return c;
     }
 
 public:
-    // Lê e processa os dados do arquivo
     void lerDados(const string &arquivo)
     {
-        ifstream entrada(arquivo);
-        if (!entrada.is_open())
+        ifstream in(arquivo);
+        if (!in.is_open())
         {
-            cerr << "Erro ao abrir o arquivo " << arquivo << endl;
+            cerr << "Erro abrir " << arquivo << endl;
             return;
         }
         string linha, secao = "none";
-        while (getline(entrada, linha))
+        int proxId = 1;
+        while (getline(in, linha))
         {
             linha = trim(linha);
-            if (linha.empty())
+            if (linha.empty() || linha == "-1")
                 continue;
-            if (linha.find("Name:") != string::npos ||
-                linha.find("Optimal value:") != string::npos ||
-                linha.find("#Vehicles:") != string::npos ||
-                linha.find("Capacity:") != string::npos ||
-                linha.find("Depot Node:") != string::npos ||
-                linha.find("#Nodes:") != string::npos ||
-                linha.find("#Edges:") != string::npos ||
-                linha.find("#Arcs:") != string::npos ||
-                linha.find("#Required") != string::npos)
+            string ll = linha;
+            transform(ll.begin(), ll.end(), ll.begin(), ::tolower);
+            if (ll.find("depot node:") != string::npos)
+            {
+                depot = safeStoi(split(linha).back());
                 continue;
-            if (linha.substr(0, 3) == "ReN" || linha.substr(0, 4) == "ReN.")
+            }
+            if (ll.find("capacity:") != string::npos)
+            {
+                capacidade_veiculo = safeStoi(split(linha).back());
+                continue;
+            }
+            if (ll.rfind("ren", 0) == 0)
                 secao = "reqnodes";
-            else if (linha.substr(0, 3) == "ReE" || linha.substr(0, 4) == "ReE.")
+            else if (ll.rfind("ree", 0) == 0)
                 secao = "reqedges";
-            else if (linha.substr(0, 4) == "EDGE")
+            else if (ll.rfind("edge", 0) == 0)
                 secao = "edges";
-            else if (linha.substr(0, 4) == "ReA.")
+            else if (ll.rfind("rea.", 0) == 0)
                 secao = "reqarcs";
-            else if (linha.substr(0, 3) == "ARC")
+            else if (ll.rfind("arc", 0) == 0)
                 secao = "arcs";
             else
-                processarLinha(linha, secao);
+                processarLinha(linha, secao, proxId);
         }
-        entrada.close();
+        in.close();
         inicializarMatrizes();
     }
 
-    // Calcula todas as métricas
     void calcularTodasMetricas()
     {
         metricas.qtd_vertices = total_nos;
@@ -403,7 +409,7 @@ public:
         metricas.qtd_arcos = arcos.size();
         metricas.vertices_req = nos_requeridos.size();
         metricas.arestas_req = arestas_requeridas.size();
-        metricas.arcos_req = arcos_requeridos.size();
+        metricas.arcos_req = arcos_requeridas.size();
         metricas.densidade = calcularDensidade();
         calcularGraus();
         calcularIntermediacao();
@@ -411,57 +417,148 @@ public:
         metricas.diametro = calcularDiametro();
     }
 
-    // Imprime os resultados no ostream informado
-    void imprimirResultados(ostream &out) const
-    {
-        // Imprime densidade com 4 casas decimais; os demais com 2 casas decimais
-        out << fixed << setprecision(2);
-        out << "1. Vértices: " << metricas.qtd_vertices << "\n";
-        out << "2. Arestas: " << metricas.qtd_arestas << "\n";
-        out << "3. Arcos: " << metricas.qtd_arcos << "\n";
-        out << "4. Vértices requeridos: " << metricas.vertices_req << "\n";
-        out << "5. Arestas requeridas: " << metricas.arestas_req << "\n";
-        out << "6. Arcos requeridos: " << metricas.arcos_req << "\n";
-        out << "7. Densidade: " << fixed << setprecision(4) << metricas.densidade << "\n";
-        out << setprecision(2);
-        out << "8. Grau mínimo: " << metricas.grau_min << "\n";
-        out << "9. Grau máximo: " << metricas.grau_max << "\n";
-        out << "10. Intermediação:\n";
-        for (const auto &par : metricas.intermediacao)
-            out << "    " << par.first << ": " << par.second << "\n";
-        out << "11. Caminho médio: " << metricas.caminho_medio << "\n";
-        out << "12. Diâmetro: " << metricas.diametro << "\n";
-    }
-
-    // Salva os resultados em um arquivo de texto
     void salvarResultados(const string &nome_arquivo) const
     {
-        ofstream saida(nome_arquivo);
-        if (!saida.is_open())
+        ofstream out(nome_arquivo);
+        if (!out.is_open())
         {
-            cerr << "Erro ao abrir o arquivo " << nome_arquivo << " para salvar os resultados." << endl;
+            cerr << "Erro salvar " << nome_arquivo << endl;
             return;
         }
-        imprimirResultados(saida);
-        saida.close();
+        out << fixed << setprecision(2)
+            << "1. Vertices: " << metricas.qtd_vertices << "\n"
+            << "2. Arestas: " << metricas.qtd_arestas << "\n"
+            << "3. Arcos: " << metricas.qtd_arcos << "\n"
+            << "4. Vertices req: " << metricas.vertices_req << "\n"
+            << "5. Arestas req: " << metricas.arestas_req << "\n"
+            << "6. Arcos req: " << metricas.arcos_req << "\n"
+            << setprecision(4)
+            << "7. Densidade: " << metricas.densidade << "\n"
+            << setprecision(2)
+            << "8. Grau min: " << metricas.grau_min << "\n"
+            << "9. Grau max: " << metricas.grau_max << "\n"
+            << "10. Intermediacao:\n";
+        for (auto &p : metricas.intermediacao)
+            out << "    " << p.first << ": " << p.second << "\n";
+        out << "11. Caminho medio: " << metricas.caminho_medio << "\n"
+            << "12. Diametro: " << metricas.diametro << "\n";
+    }
+
+    void salvarSolucao(const string &nomeArquivo, long long total_ns)
+    {
+        const int REP = 100;
+        vector<Rota> rotas;
+        auto t2 = chrono::steady_clock::now();
+        for (int i = 0; i < REP; i++)
+            rotas = gerarRotas();
+        auto t3 = chrono::steady_clock::now();
+        double sol_ns = double(chrono::duration_cast<chrono::nanoseconds>(t3 - t2).count()) / REP;
+
+#ifdef _WIN32
+        _mkdir("solutions");
+#else
+        mkdir("solutions", 0755);
+#endif
+        ofstream out(nomeArquivo);
+        if (!out.is_open())
+        {
+            cerr << "Erro criar " << nomeArquivo << endl;
+            return;
+        }
+        out << fixed << setprecision(0);
+        out << custoTotal(rotas) << "\n"
+            << rotas.size() << "\n"
+            << total_ns << "\n"
+            << sol_ns << "\n";
+        for (size_t k = 0; k < rotas.size(); ++k)
+        {
+            auto &R = rotas[k];
+            out << "0 1 " << (k + 1) << " " << R.demanda << " " << R.custo << " " << R.vis.size();
+            for (auto &v : R.vis)
+            {
+                if (v.depot)
+                    out << " (D 0,1,1)";
+                else
+                    out << " (S " << v.id << "," << (v.u + 1) << "," << (v.v + 1) << ")";
+            }
+            out << "\n";
+        }
     }
 };
 
+/** retorna lista de arquivos .dat em data/ **/
+vector<string> listarInstancias()
+{
+    vector<string> files;
+#ifdef _WIN32
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA("data\\*.dat", &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return files;
+    do
+    {
+        files.push_back(fd.cFileName);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *d = opendir("data");
+    if (!d)
+        return files;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != nullptr)
+    {
+        string name = ent->d_name;
+        if (name.size() > 4 && name.substr(name.size() - 4) == ".dat")
+            files.push_back(name);
+    }
+    closedir(d);
+#endif
+    sort(files.begin(), files.end());
+    return files;
+}
+
 int main()
 {
-    string nomeArquivo;
-    cout << "Digite o nome do arquivo .dat (somente o nome, ex: dados.dat): ";
-    getline(cin, nomeArquivo);
-    if (nomeArquivo.empty())
-        nomeArquivo = "dados.dat"; // Usa nome padrão se não for informado nenhum
+    // cria pastas de saida
+#ifdef _WIN32
+    _mkdir("results");
+    _mkdir("solutions");
+#else
+    mkdir("results", 0755);
+    mkdir("solutions", 0755);
+#endif
 
-    string caminhoArquivo = "data/" + nomeArquivo;
+    // lista instancias
+    vector<string> insts = listarInstancias();
+    if (insts.empty())
+    {
+        cerr << "Nenhuma .dat encontrada em data/" << endl;
+        return 1;
+    }
 
-    GrafoLogistica grafo;
-    grafo.lerDados(caminhoArquivo);
-    grafo.calcularTodasMetricas();
-    grafo.salvarResultados("results/resultados.txt");
-    cout << "Resultados salvos com sucesso em results/resultados.txt";
+    // processa cada instancia
+    for (auto &nomeArquivo : insts)
+    {
+        string base = nomeArquivo.substr(0, nomeArquivo.size() - 4);
+        string path = "data/" + nomeArquivo;
+        cout << "Processando " << nomeArquivo << " ..." << endl;
 
+        GrafoLogistica grafo;
+        auto t0 = chrono::steady_clock::now();
+        grafo.lerDados(path);
+        grafo.calcularTodasMetricas();
+        auto t1 = chrono::steady_clock::now();
+        long long total_ns = chrono::duration_cast<chrono::nanoseconds>(t1 - t0).count();
+
+        // grava metricas
+        string outMet = "results/metrics-" + base + ".txt";
+        grafo.salvarResultados(outMet);
+        cout << "  Metricas -> " << outMet << endl;
+
+        // grava solucao
+        string outSol = "solutions/sol-" + base + ".dat";
+        grafo.salvarSolucao(outSol, total_ns);
+        cout << "  Solucao  -> " << outSol << endl;
+    }
     return 0;
 }
