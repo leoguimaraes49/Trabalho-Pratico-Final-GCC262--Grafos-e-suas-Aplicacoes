@@ -8,12 +8,12 @@
 #include <vector>
 #include <string>
 #include <algorithm>
-#include <windows.h>   // WIN32_FIND_DATAA, FindFirstFileA…
 #include <fstream>
 #include <iomanip>
 #include <chrono>
 
 #ifdef _WIN32
+  #include <windows.h>     // WIN32_FIND_DATAA, FindFirstFileA…
   #include <direct.h>      // _mkdir
 #else
   #include <sys/stat.h>    // mkdir

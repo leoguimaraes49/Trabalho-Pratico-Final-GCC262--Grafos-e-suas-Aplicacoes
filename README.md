@@ -50,8 +50,8 @@ Para cada instância `<nome_instancia>.dat`, é gerado um arquivo `solutions/sol
 
 <custo total>
 <# rotas>
-<clock_ticks da primeira chamada a gerarRotas()>
-<média de clock_ticks das demais chamadas>
+<tempo em nanossegundos da primeira chamada a gerarRotas()>
+<média em nanossegundos de outras 100 chamadas>
 ```
 
 E, em seguida, uma linha por rota no padrão:
@@ -88,11 +88,22 @@ O `main.cpp` foi estendido para:
 ## Compilação e Execução
 
 ```bash
-g++ -std=c++17 -O2 main.cpp -o grafo_logistica
+g++ -std=c++17 -O2 -Iinclude main.cpp src/Orchestrator.cpp src/Instance.cpp src/Graph.cpp src/Optimizer.cpp src/Route.cpp src/utils.cpp -o grafo_logistica
 ./grafo_logistica
 ```
 
-* Gera `results/metrics-*.txt` e `solutions/sol-*.dat`.
+Execute o programa a partir da raiz do repositório. Ele lê arquivos `.dat` de `data/` e gera `results/metrics-*.txt` e `solutions/sol-*.dat`, substituindo arquivos de saída que tenham o mesmo nome. Faça uma cópia dos resultados que quiser preservar antes de executar.
+
+A implementação é um trabalho acadêmico: a viabilidade e a cobertura das rotas precisam ser conferidas antes de usar os resultados. Em particular, a heurística ainda requer revisão do tratamento do depósito, de arcos direcionados e de instâncias nas quais não há serviço viável para a capacidade do veículo.
+
+### Teste da métrica de intermediação
+
+```bash
+g++ -std=c++17 -Iinclude tests/graph_metrics.cpp src/Graph.cpp -o test_graph_metrics
+./test_graph_metrics
+```
+
+O teste verifica a intermediação em um grafo pequeno e sua estabilidade ao recalcular as métricas; ele não valida a heurística de roteamento.
 
 ---
 
