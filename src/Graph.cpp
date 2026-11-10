@@ -99,6 +99,9 @@ void Graph::calcularGraus()
 
 void Graph::calcularIntermediacao()
 {
+    for (auto &entrada : metricas.intermediacao)
+        entrada.second = 0.0;
+
     for (int s = 0; s < total_nos; s++)
         for (int t = 0; t < total_nos; t++)
             if (s != t && predecessores[s][t] != -1)
